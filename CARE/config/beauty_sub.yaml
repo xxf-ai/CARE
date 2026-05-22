@@ -1,0 +1,45 @@
+# config/beauty_sub.yaml
+# -----------------------
+# Amazon-Beauty 采样子集配置（3000 用户）
+
+dataset:
+  name:              beauty_sub
+  raw_inter:         data/raw/All_Beauty.jsonl
+  raw_meta:          data/raw/meta_All_Beauty.jsonl
+  data_dir:          data/beauty_sub
+  cache_dir:         cache/beauty_sub
+  image_dir:         data/beauty_sub/images
+  k_core:            5
+  is_beauty_sub:     true
+  beauty_target_users: 3000
+  seed:              42
+
+stats:
+  n_users_approx:  3000
+  n_items_approx:  2200
+  n_inter_approx: 25000
+
+features:
+  clip_dim:       768
+  collab_dim:      64
+
+training:
+  batch_size:     256     # 数据集较小，batch 减半
+  epochs:         100
+  lr_main:        1e-3
+  lr_lora:        5e-4
+  weight_decay:   1e-4
+  early_stop:     10
+  seeds:          [42, 123, 456]
+
+model:
+  d:              64
+  n_layers:        3
+  lora_rank:       8
+  tau:            0.1
+  n_coarse:       20
+
+evaluation:
+  k_list:         [5, 10, 20]
+  main_metric:    ndcg@10
+  n_neg_samples:  99
