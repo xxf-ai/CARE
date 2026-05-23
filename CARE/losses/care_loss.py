@@ -1,5 +1,5 @@
 """
-losses/vara_loss.py — VARA training loss
+losses/care_loss.py — CARE training loss
 
 BPR loss on CF scores. Raw CLIP text is applied zero-shot at inference only.
 """
