@@ -1,5 +1,5 @@
 """
-models/vara.py — VARA (Vision-Aware Reranking Agent)
+models/care.py — CARE
 
 Simplified: CF backbone (BPR-MF) trains on collaborative signals.
 At inference, raw CLIP text cosine similarity is fused for cold-start items.
