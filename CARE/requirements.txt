@@ -1,0 +1,27 @@
+# requirements.txt
+# -----------------
+# CARE 实验环境依赖
+# 安装命令：pip install -r requirements.txt
+
+# ── 深度学习框架 ──────────────────────────────────
+torch>=2.1.0
+torchvision>=0.16.0
+
+# ── CLIP (required) ───────────────────────────────
+openai-clip>=1.0
+
+# ── 数据处理 ──────────────────────────────────────
+numpy>=1.24.0
+scipy>=1.11.0
+pandas>=2.0.0
+scikit-learn>=1.3.0
+
+# ── 工具库 ────────────────────────────────────────
+tqdm>=4.65.0
+pyyaml>=6.0.1
+
+# ── 可视化与日志 ──────────────────────────────────
+matplotlib>=3.7.0
+
+# ── 可选：Sentence-BERT（仅消融 A6 需要）─────────
+# pip install sentence-transformers
