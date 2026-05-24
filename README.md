@@ -1,28 +1,90 @@
-# CARE
-We introduce CARE, a single-parameter inference gate that deterministically removes CF at zero interactions and restores it as item evidence accumulates, without modifying the CF training objective.
+# CARE: a coldness-aware reliability calibration method for multimodal cold-start recommendation
 
-A lightweight multimodal recommendation system that uses CLIP text embeddings as visual-semantic proxies for cold-start reranking.
+CARE is a coldness-aware reliability calibration method for multimodal cold-start recommendation. Instead of building a new fusion module or backbone, CARE addresses a more specific question: **when an item has zero training interactions, should the collaborative filtering (CF) score still participate in the final ranking?**
 
-**Core insight**: CLIP's text encoder produces embeddings in a joint vision-language space -- text descriptions serve as effective visual-semantic proxies without requiring image processing at runtime.
+**Core answer**: On zero-interaction items, CF is not just a weak signal — it can be *actively harmful*, contaminating otherwise usable semantic rankings from text and image. CARE uses a single-parameter, inference-time gate to deterministically remove CF when `c(i) = 0` and gradually restore it as interaction evidence accumulates.
 
-## Architecture
+## Research Overview
+
+### Problem: Channel-Trust Calibration
+
+Traditional multimodal cold-start recommendation treats CF as universally informative and supplements it with side information (text, images, metadata). CARE reframes this as a **channel-trust calibration** problem:
+
+- **Collaborative channel**: CF scores learned from interaction data — reliable for warm items, unreliable for cold items.
+- **Semantic channel** (text / image): Zero-shot semantic evidence from CLIP — does not depend on target-item interactions, remains informative even at zero interactions.
+
+The key question is not *how to fuse more signals*, but **how to judge which signals are trustworthy at each item coldness level**.
+
+### Core Formula
 
 ```
-CARE (models/vara.py)
+ŝ(u,i) = (1 − w(i)) · s_cf(u,i)  +  w(i) · s_sem(u,i)
+
+w(i) = 1 / (1 + α · c(i))
+```
+
+- `c(i)`: item `i`'s interaction count in training data
+- `w(i)`: semantic channel weight
+- `1 − w(i)`: collaborative channel weight
+- `s_sem ∈ {s_text, s_image}`: semantic score from text or image
+
+**Critical boundary condition**: When `c(i) = 0`, `w(i) = 1` and `1 − w(i) = 0`. CARE *deterministically removes* CF from the score — not just down-weights it.
+
+As `c(i)` grows, CF weight gradually recovers. CARE never permanently relies on semantic channels; it adapts to the evidence available per item.
+
+### Architecture
+
+```
+CARE (models/care.py)
 └── CF Backbone: user_emb[n_users, d] + item_emb[n_items, d]
     └── score_cf = normalized dot product / τ
 
-Training: pure BPR loss on CF backbone scores.
-Inference: CF scores are combined with raw CLIP text cosine similarity
-via post-hoc coldness-gated fusion:
-
-  w_txt = 1 / (1 + α · item_count)
-  fused = (1 - w_txt) · cf_score + w_txt · clip_cos_sim
-
-Cold items (count → 0) get w_txt → 1.0 (pure text).
-Warm items (count → ∞) get w_txt → 0.0 (pure CF).
-α controls transition steepness.
+Training: pure BPR loss on CF backbone scores (no text adapter, no fusion weights).
+Inference: coldness-gated fusion is applied post-hoc.
 ```
+
+### Key Design Properties
+
+| Property | Implication |
+|----------|-------------|
+| Training unchanged | CF backbone trains on collaborative signals only; no interference from multimodal features |
+| Semantic encoder frozen | CLIP features precomputed offline; zero-shot, no fine-tuning |
+| Inference-time gate only | The gate is not a trained module; it applies a deterministic function of item count |
+| `w(0) = 1` boundary | Zero-interaction items get pure semantic score — CF is structurally excluded |
+| One parameter (`α`) | Controls the transition steepness from text-reliant to CF-dominant |
+| Text and image both supported | `s_sem` can be CLIP text or CLIP visual; the gate rule is modality-agnostic |
+
+## Research Questions
+
+The experiments are organized around four Research Questions:
+
+### RQ1: Where and How Does CF Hurt?
+
+Prove that CF collapse at zero interactions is real, and that semantic channels (text / image) remain usable. CARE-Text and CARE-Image both recover cold-start performance.
+
+**Core evidence**: Stratified evaluation across coldness buckets:
+- **L0** (zero-shot): CF nearly collapses; text/image still provide usable signal; CARE recovers performance.
+- **L1–L2** (cold/warm): CARE smoothly transitions from semantic to CF.
+- **L3** (hot): CF recovers strong signal; CARE no longer over-relies on semantics.
+
+### RQ2: Is This Only a Weak-Backbone Artifact?
+
+Prove that L0 CF collapse is not specific to BPR-MF. Tested across 11 models including LightGCN, VBPR, BM3, LGMRec, PEARL, PromptMM, DropoutNet, CLCRec, CCFCRec, MARec.
+
+Even recent multimodal models and cold-start-specialized models expose unreliable CF scores on zero-interaction items. The problem is about *scoring reliability*, not backbone choice.
+
+### RQ3: Robustness of Coldness-Aware Trust Calibration
+
+Prove the boundary condition is not naturally learned by alternatives:
+- **Fixed-weight fusion**: Improves cold-start but cannot distinguish L0 from L3.
+- **Learned gate**: Under aggregate full-set objective, a 2-parameter learned gate retains 73%–84% CF weight even at `c(i) = 0` — it does not naturally discover `w(0) = 1`.
+- **Full-set metrics**: Aggregate NDCG changes minimally, while L0 NDCG changes dramatically — aggregate evaluation masks cold-tail failure.
+- **Full-ranking**: Full-ranking objective favors warm majority; the optimal α differs from sampled evaluation.
+- **Cross-domain (Yelp)**: The same CF reliability pattern holds across domains.
+
+### RQ4: Why Is One Parameter Sufficient?
+
+If CF estimator uncertainty decreases with item interaction count, and semantic estimator variance is relatively independent of target-item interactions, then the minimum-variance linear combination naturally raises CF weight as coldness decreases. CARE's inverse gate is a simple, interpretable approximation of this reliability transition.
 
 ## Requirements
 
@@ -123,7 +185,7 @@ python evaluate.py --dataset baby --seeds 42 123 456
 ```
 
 Output per dataset:
-- `results/{dataset}_vara_results.json` — Full per-seed metrics + stratified analysis
+- `results/{dataset}_care_results.json` — Full per-seed metrics + stratified analysis
 
 ## Experiments
 
@@ -139,7 +201,7 @@ python experiments/baselines/run_coldstart_baselines.py --dataset baby --seeds 4
 # New multimodal baselines (LGMRec, PEARL, PromptMM)
 python experiments/baselines/run_new_baselines.py --dataset baby --seeds 42 123 456
 
-# Stratified evaluation for all models
+# Stratified evaluation for all models (RQ2: cross-model diagnostic)
 python experiments/baselines/run_stratified_baselines.py --dataset baby --seeds 42 123 456
 
 # MAMEX-style modality gating baseline
@@ -152,17 +214,42 @@ python experiments/baselines/meta_coldstart.py --dataset baby --seeds 42 123 456
 ### Ablations
 
 ```bash
-# A1-A4: VARA, w/o Text, SBERT Text, Coldness Gate
+# A1-A4: CARE, w/o Text, SBERT Text, Coldness Gate
 python experiments/ablations/run_ablation.py --dataset baby --seeds 42 123 456
 
-# Gate function design space comparison
+# Gate function design space comparison (RQ3)
 python experiments/ablations/gate_functions.py --dataset baby
 
-# Learned gate (2-param / 4-param)
+# Learned gate (2-param / 4-param) — RQ3 diagnostic
 python experiments/ablations/learned_gate.py --dataset baby
 
-# Per-bucket alpha analysis
+# Per-bucket alpha analysis (RQ4)
 python experiments/ablations/per_bucket_alpha.py --dataset baby
+```
+
+### Analysis Tools
+
+```bash
+# Alpha selection rule analysis
+python experiments/analysis/alpha_selection_rule.py --dataset baby
+
+# Gate activation visualization
+python experiments/analysis/alpha_visualize.py --dataset baby --seed 42
+
+# Cross-model stratified report (RQ2)
+python experiments/analysis/cross_model_report.py --dataset baby
+
+# Full-ranking alpha sweep (RQ3: full-ranking validation)
+python experiments/analysis/full_rank_alpha_sweep.py --dataset baby
+
+# Variance decomposition analysis
+python experiments/analysis/variance_decomposition.py --dataset baby
+
+# Paper figure generation
+python experiments/analysis/generate_paper_figures.py
+
+# Paper table generation
+python experiments/analysis/make_tables.py --dataset baby
 ```
 
 ### Full pipeline
@@ -178,12 +265,12 @@ CARE/
 ├── README.md
 ├── requirements.txt
 ├── train.py                    — Training entry point
-├── evaluate.py                 — Evaluation entry point
+├── evaluate.py                 — Evaluation entry point (coldness-stratified)
 ├── models/
-│   ├── vara.py                 — CARE model (BPR-MF backbone)
+│   ├── care.py                 — CARE model (BPR-MF backbone)
 │   └── __init__.py
 ├── losses/
-│   ├── vara_loss.py            — BPR loss for CARE
+│   ├── care_loss.py            — BPR loss for CARE
 │   ├── bpr.py                  — BPR + in-batch BPR loss
 │   └── __init__.py
 ├── data_utils/
@@ -206,7 +293,7 @@ CARE/
 │   ├── verify_data.py          — Data verification
 │   ├── verify_cache.py         — Cache verification
 │   ├── run_preprocess.sh       — Full pipeline (with images)
-│   ├── run_pipeline_new.sh     — VARA pipeline (text-only)
+│   ├── run_pipeline_new.sh     — CARE pipeline (text-only)
 │   └── run_cache.sh            — Feature caching pipeline
 └── experiments/
     ├── eval_protocol.py        — High-speed eval protocol
@@ -225,7 +312,7 @@ CARE/
     │   ├── mamex_style.py
     │   └── meta_coldstart.py
     ├── ablations/
-    │   ├── run_ablation.py     — VARA ablation variants (A1-A4)
+    │   ├── run_ablation.py     — CARE ablation variants (A1-A4)
     │   ├── gate_functions.py   — Gate design space
     │   ├── learned_gate.py     — Learned gate (2/4 param)
     │   └── per_bucket_alpha.py — Per-bucket alpha
@@ -242,11 +329,14 @@ CARE/
 
 ## Key Design Decisions
 
-- **Pure BPR-MF backbone**: Only user_emb + item_emb, no text adapter, no fusion weights. Training stays simple and stable.
-- **Post-hoc text fusion**: CLIP text similarity applied only at inference — zero-shot, parameter-free.
+- **Pure BPR-MF backbone**: Only user_emb + item_emb, no text adapter, no fusion weights. Training stays simple and stable — the CF backbone learns clean collaborative signals without interference from multimodal features.
+- **Post-hoc semantic fusion**: CLIP text/image similarity applied only at inference — zero-shot, parameter-free. This keeps the method deployable without retraining and proves the benefit comes from the gate, not from a better fusion module.
 - **τ_score=1.0**: Cosine similarity directly for BPR, same as BPR-MF baseline.
-- **Coldness-gated fusion (CARE)**: Per-item dynamic weight `w = 1/(1+α·count)` smoothly transitions from text-reliant (cold) to CF-dominant (warm).
+- **Coldness-gated fusion**: Per-item dynamic weight `w = 1/(1+α·count)` smoothly transitions from semantic-reliant (cold) to CF-dominant (warm) without a hard threshold.
+- **Deterministic boundary**: `w(0) = 1` guarantees zero-interaction items get pure semantic score — CF is structurally excluded, not just down-weighted.
+- **Semantic channel abstraction**: `s_sem ∈ {s_text, s_image}` — the gate rule is modality-agnostic. Both text and image are instances of the same semantic channel.
 - **No images at runtime**: All features precomputed offline.
+- **Coldness-stratified evaluation**: Metrics reported per interaction-count bucket (L0–L3) to prevent aggregate metrics from masking cold-tail failure.
 
 ## Default Config
 
